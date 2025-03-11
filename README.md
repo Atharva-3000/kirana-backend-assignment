@@ -150,3 +150,5 @@ curl http://localhost:3000/api/status?jobid=<job_id>
 
 
 (Honestly speaking i was not able to test the docker setup, as my system simply doesn't have enough resources to run docker, so i have tested the code without docker and it is working fine.)
+
+(Won't Say I haven't taken help from A.I., I needed to understand buffer so took help there, as well as for misc stuff like system wide logger and documentation formatting, and random image urls.)
