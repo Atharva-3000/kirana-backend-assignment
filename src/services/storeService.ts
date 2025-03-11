@@ -1,6 +1,8 @@
 import fs from 'fs';
 import csv from 'csv-parser';
 import { STORE_MASTER_PATH } from '../config/config.js';
+import { storeCache, incrementCacheHit, incrementCacheMiss } from '../utils/cache.js';
+import logger from '../utils/logger.js';
 
 class StoreService {
   private storeMaster: Set<string> = new Set();
@@ -16,6 +18,8 @@ class StoreService {
       return this.loadingPromise;
     }
 
+    logger.info('Loading store master data');
+
     this.loadingPromise = new Promise((resolve) => {
       fs.createReadStream(STORE_MASTER_PATH)
         .pipe(csv())
@@ -23,8 +27,8 @@ class StoreService {
           this.storeMaster.add(row.StoreID.trim());
         })
         .on('end', () => {
-          console.log('Store master data loaded');
           this.isLoaded = true;
+          logger.info(`Store master data loaded. ${this.storeMaster.size} stores found.`);
           resolve();
         });
     });
@@ -33,10 +37,28 @@ class StoreService {
   }
 
   async isStoreValid(storeId: string): Promise<boolean> {
+    // Check cache first
+    const cacheKey = `store_${storeId}`;
+    const cachedResult = storeCache.get(cacheKey);
+
+    if (cachedResult !== undefined) {
+      incrementCacheHit();
+      return cachedResult as boolean;
+    }
+
+    incrementCacheMiss();
+
+    // If not in cache, check from store master
     if (!this.isLoaded) {
       await this.loadingPromise;
     }
-    return this.storeMaster.has(storeId);
+
+    const isValid = this.storeMaster.has(storeId);
+
+    // Cache the result
+    storeCache.set(cacheKey, isValid);
+
+    return isValid;
   }
 }
 

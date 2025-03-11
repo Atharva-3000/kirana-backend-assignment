@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Job, JobId, Visit, JobError } from '../models/job.js';
 import { storeService } from './storeService.js';
 import { imageService } from './imageService.js';
+import { addToQueue } from '../queue/jobQueue.js';
 
 class JobService {
   private jobs: Map<JobId, Job> = new Map();
@@ -11,12 +12,17 @@ class JobService {
     const job: Job = {
       status: 'ongoing',
       errors: [],
-      data: { visits }
+      data: { visits },
+      results: [] // Add a results array to store completed image results
     };
-    
+
     this.jobs.set(jobId, job);
-    this.processJob(job);
-    
+
+    // Use queue for processing
+    addToQueue(jobId, visits).catch(error => {
+      this.updateJobError(jobId, 'system', 'Failed to queue job: ' + error.message);
+    });
+
     return jobId;
   }
 
@@ -24,34 +30,41 @@ class JobService {
     return this.jobs.get(jobId);
   }
 
-  private async processJob(job: Job): Promise<void> {
-    try {
-      for (const visit of job.data.visits) {
-        const { store_id, image_url } = visit;
+  updateJobError(jobId: JobId, storeId: string, message: string): void {
+    const job = this.jobs.get(jobId);
+    if (job) {
+      this.addJobError(job, storeId, message);
+      this.checkJobCompletion(jobId);
+    }
+  }
 
-        // Validate store ID
-        if (!(await storeService.isStoreValid(store_id))) {
-          this.addJobError(job, store_id, 'Invalid store ID');
-          continue;
-        }
+  addImageResult(jobId: JobId, storeId: string, imageUrl: string, perimeter: number): void {
+    const job = this.jobs.get(jobId);
+    if (job && job.results) {
+      job.results.push({
+        store_id: storeId,
+        image_id: imageUrl, // Changed to match the interface
+        result: perimeter // Changed to match the interface
+      });
+      this.checkJobCompletion(jobId);
+    }
+  }
 
-        // Process images
-        await Promise.all(image_url.map(async (url: string) => {
-          try {
-            const imageBuffer = await imageService.downloadImage(url);
-            const perimeter = imageService.calculatePerimeter(imageBuffer);
-            await imageService.simulateGpuProcessing();
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.addJobError(job, store_id, errorMessage);
-          }
-        }));
-      }
+  private checkJobCompletion(jobId: JobId): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
 
-      job.status = job.errors.length > 0 ? 'failed' : 'completed';
-    } catch (error) {
+    // Calculate total expected images
+    let totalExpectedImages = 0;
+    for (const visit of job.data.visits) {
+      totalExpectedImages += visit.image_url.length;
+    }
+
+    // If we have errors or all images are processed, mark job as complete
+    if (job.errors.length > 0) {
       job.status = 'failed';
-      this.addJobError(job, 'system', 'Unexpected processing error');
+    } else if (job.results && job.results.length >= totalExpectedImages) {
+      job.status = 'completed';
     }
   }
 
